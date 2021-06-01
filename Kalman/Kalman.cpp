@@ -45,6 +45,7 @@
 
 void multiplyMatrixAxB(const uint8_t rows1, const uint8_t cols1, float size1, float matrix1[], const uint8_t rows2, const uint8_t cols2, float size2, float matrix2[]);
 void addMatrixAnB(const uint8_t rows1, const uint8_t cols1, float size1, float matrix1[], const uint8_t rows2, const uint8_t cols2, float size2, float matrix2[]);
+void subMatrixAnB(const uint8_t rows1, const uint8_t cols1, float size1, float matrix1[], const uint8_t rows2, const uint8_t cols2, float size2, float matrix2[]);
 void multiplyMatrixByScalar(const uint8_t rows_, const uint8_t cols_, float size_, float matrix[], const float scalar);
 void transposeMatrix(const uint8_t rows_, const uint8_t cols_, float size_, float matrix[]);
 
@@ -53,7 +54,7 @@ void print3x3(float matrix[]);
 void print3x1(float matrix[]);
 bool checkNaN3x1(float matrix[]);
 bool checkNaN3x3(float matrix[]);
-/* void inverseMatrix(const uint8_t order, float matrix[]); */
+// void inverseMatrix(const uint8_t order, float matrix[]);
 
 // Temp Variable to hold matrixes
 float temp3x3[9] = {0};
@@ -67,8 +68,7 @@ Kalman::Kalman() {}
 // De-Constructor
 Kalman::~Kalman(){}
 
-void Kalman::initialize()
-{
+void Kalman::initialize() {
 	uint8_t i;
 	for(i = 0; i < 9; i++)
 	{
@@ -96,11 +96,13 @@ void Kalman::initialize()
 		{
 			eye[i] = 1.0;
 			S[i] = 1.0;
+			R[i] = 1.0;
 		}
 		else
 		{
 			eye[i] = 0.0;
 			S[i] = 0.0;
+			R[i] = 0.0;
 		}
 	}
 	
@@ -108,19 +110,14 @@ void Kalman::initialize()
 	X[1] = 0.0;
 	X[2] = 0.0;
 	
-	dgdx[0] = 0.0;
-	dgdx[1] = 0.0;
-	dgdx[2] = 1.0;
-	
 	/* print3x1(X);
-	print3x1(dgdx);
+	print3x3(dgdx);
 	print3x3(dfda);
 	print3x3(dfdx);
 	print3x3(S); */
 }
 
-void Kalman::runFilter()
-{
+void Kalman::runFilter() {
 	if(abort)
 	{
 		return;
@@ -219,42 +216,27 @@ void Kalman::runFilter()
 	//------------------------------
 	// Determine K, kalman gain
 	//------------------------------
-	squared = false;
-	multiplyMatrixAxB(3,3, sizeof(S)/FLOAT, S, 3, 1, sizeof(dgdx)/FLOAT, dgdx);					// S*(dgdx')
-	float sDgdx[3];												// 3x1
-	memcpy(sDgdx, temp3, sizeof(temp3));
+	squared = true;
+	addMatrixAnB(3, 3, sizeof(S)/FLOAT, S, 3, 3, sizeof(R)/FLOAT, R);	// S + R
+	multiplyMatrixAxB(3,3, sizeof(S)/FLOAT, S, 3, 3, sizeof(temp3x3)/FLOAT, temp3x3);	// S * (S + R)
 	
-	/* multiplyMatrixAxB(1,3, sizeof(dgdx)/FLOAT, dgdx, 3, 3, sizeof(S)/FLOAT, S);					//(dgdx)*S
-	Serial.print(F("dgdx*S = ")); print3x1(temp3);
-	
-	multiplyMatrixAxB(1,3, sizeof(temp3)/FLOAT, temp3, 3, 1, sizeof(dgdx)/FLOAT, dgdx);	//(dgdx)*S*(dgdx'), Returns a 1x1
-	Serial.print(F("dgdx*S*dgdx' = ")); print3x1(temp3); */
-	
-	// R = dgdn*R*dgdn;										// dgdn is just a 1x1 constant 1
-	
-	float onebyone = S[8] + R;				// dgdx*S*(dgdx') + dgdn*R*dgdn', Only need first value of temp3 since last return was 1x1
-	onebyone = 1/onebyone;								// Inverse of previous Value
-	
-	multiplyMatrixByScalar(3, 1, sizeof(sDgdx)/FLOAT, sDgdx, onebyone);
-	float K[3];														// This is the Kalman Gain (3x1)
-	memcpy(K, temp3, sizeof(temp3));
+	float K[9];														// This is the Kalman Gain (3x3)
+	memcpy(K, temp3x3, sizeof(temp3x3));
 	
 	#ifdef DEBUG
 		Serial.print(F("K = "));
-		print3x1(K);
+		print3x3(K);
 		debugPrompt();
 	#endif
 	
 	//------------------------------
 	// Determine updated X
 	//------------------------------
-	multiplyMatrixByScalar(3, 1, sizeof(K)/FLOAT, K, (sensorValue - X[2]));
-	
-	float kScalar[3];											// K*(Y - g), 3x1
-	memcpy(kScalar, temp3, sizeof(temp3));
-	
-	addMatrixAnB(3, 1, sizeof(X)/FLOAT, X, 3, 1, sizeof(kScalar)/FLOAT, kScalar);			// X + K*(Y - g), 3x1
-	memcpy(X, temp3, sizeof(temp3));			// This is updates state matrix, X, 3x1
+	squared = false;
+	subMatrixAnB(3, 1, sizeof(sensorModel)/FLOAT, sensorModel, 3, 1, sizeof(X)/FLOAT, X);	//        (Y - X)
+	multiplyMatrixAxB(3, 3, sizeof(K)/FLOAT, K, 3, 1, sizeof(temp3)/FLOAT, temp3);				//     K *(Y - X)
+	addMatrixAnB(3, 1, sizeof(X)/FLOAT, X, 3, 1, sizeof(temp3)/FLOAT, temp3);							// X + K *(Y - X), 3x1
+	memcpy(X, temp3, sizeof(temp3));																											// This updates state matrix, X, 3x1
 	
 	#ifdef DEBUG
 		Serial.print(F("Updated X = "));
@@ -265,23 +247,11 @@ void Kalman::runFilter()
 	//------------------------------
 	// Determine updated Covariance
 	//------------------------------
-	squared = true;
 	/* Serial.print(F("K")); print3x1(K); */
-	multiplyMatrixAxB(3,1, sizeof(K)/FLOAT, K, 1, 3, sizeof(dgdx)/FLOAT, dgdx);				// K*dgdx
-	
-	/* Serial.print(F("K*dgdx")); print3x3(temp3x3); */
-	if(checkNaN3x3(temp3x3))
-	{
-		Serial.println(F("Abort, bad matrix"));
-		abort = true;
-		return;
-	}
-	
-	multiplyMatrixByScalar(3, 3, sizeof(temp3x3)/FLOAT, temp3x3, -1);									// -K*dgdx
-	
-	addMatrixAnB(3, 3, sizeof(eye)/FLOAT, eye, 3, 3, sizeof(temp3x3)/FLOAT, temp3x3);	// I - K*dgdx
+	// K*dgdx = K
+	squared = true;
+	subMatrixAnB(3, 3, sizeof(eye)/FLOAT, eye, 3, 3, sizeof(K)/FLOAT, K);							//  I - K*dgdx
 	multiplyMatrixAxB(3,3, sizeof(temp3x3)/FLOAT, temp3x3, 3, 3, sizeof(S)/FLOAT, S);	// [I - K*dgdx]*S
-	
 	memcpy(S, temp3x3, sizeof(temp3x3));	// This is updated covariance, S, 3x3
 	
 	#ifdef DEBUG
@@ -297,7 +267,7 @@ void Kalman::runFilter()
 	// Determine distance traveled with new results
 	if(firstRunDone)
 	{
-		determineDistanceTraveled();
+		getDistanceTraveled();
 	}
 	else
 	{
@@ -305,8 +275,7 @@ void Kalman::runFilter()
 	}
 }
 
-void Kalman::initKalmanPrediction(float predictionX, float predictionY)
-{
+void Kalman::initKalmanPrediction(float predictionX, float predictionY) {
 	if(!maxMinSensorValuesSet)
 	{
 		Serial.println(F("Aborting application. Need to set wheel period, circumference, and direction before init kalman filter"));
@@ -337,11 +306,11 @@ void Kalman::initKalmanPrediction(float predictionX, float predictionY)
 	{
 		if(predictionY >= 0)			// X is in quadrant 1, y in 2
 		{
-			quadrant = 1;
+			currentQuadrant = 1;
 		}
 		else											// X is in quadrant 2, y in 3
 		{
-			quadrant = 2;
+			currentQuadrant = 2;
 			modelTime_s = wheelPeriod_s/2 - modelTime_s;
 		}
 	}
@@ -349,12 +318,12 @@ void Kalman::initKalmanPrediction(float predictionX, float predictionY)
 	{
 		if(predictionY >= 0)			// X is in quadrant 4, y in 1
 		{
-			quadrant = 4;
+			currentQuadrant = 4;
 			modelTime_s += wheelPeriod_s;
 		}
-		else											// X is in Quadrant 3, y in 4
+		else											// X is in quadrant 3, y in 4
 		{
-			quadrant = 3;
+			currentQuadrant = 3;
 			modelTime_s = fabs(modelTime_s) + wheelPeriod_s/2;
 		}
 	}
@@ -362,28 +331,24 @@ void Kalman::initKalmanPrediction(float predictionX, float predictionY)
 	kalmanIsInit = true;
 }
 
-void Kalman::setWheelDirection(direction wheelDirection_)
-{
+void Kalman::setWheelDirection(direction wheelDirection_) {
 	wheelDirection = wheelDirection_;
 	wheelDirectionSet = true;
 }
 
-void Kalman::setWheelCircumference_m(float wheelCircumference_m_)
-{
+void Kalman::setWheelCircumference_m(float wheelCircumference_m_) {
 	wheelCircumference_m = wheelCircumference_m_;
 	wheelCircumferenceSet = true;
 	
 	/* Serial.print(F("Wheel Circumference = ")); Serial.println(wheelCircumference_m_); */
 }
 
-void Kalman::setWheelPeriod_s(float period_s)
-{
+void Kalman::setWheelPeriod_s(float period_s) {
 	wheelPeriod_s 	= period_s;
 	wheelPeriodSet 	= true;
 }
 
-void Kalman::setStdDevModel(float stdDev)
-{
+void Kalman::setStdDevModel(float stdDev) {
 	std_dev_model		= stdDev;
 	Q[4] = pow(stdDev, 2);
 	stdDevModelSet 	= true;
@@ -392,17 +357,17 @@ void Kalman::setStdDevModel(float stdDev)
 	print3x3(Q); */
 }
 
-void Kalman::setStdDevSensor(float stdDev)
-{
+void Kalman::setStdDevSensor(float stdDev) {
 	std_dev_sensor	= stdDev;
-	R = pow(std_dev_sensor, 2);
+	R[0] = pow(std_dev_sensor, 2);
+	R[4] = pow(std_dev_sensor, 2);
+	R[8] = pow(std_dev_sensor, 2);
 	stdDevSensorSet = true;
 	
 	/* Serial.print(F("R = ")); Serial.println(R, 6); */
 }
 
-void Kalman::setMaxMinSensorValues(float min_, float max_)
-{
+void Kalman::setMaxMinSensorValues(float min_, float max_) {
 	if(!wheelPeriodSet || !wheelDirectionSet || !wheelCircumferenceSet)
 	{
 		Serial.println(F("Aborting application. Need to set wheel period, circumference, and direction before setting max/min"));
@@ -424,24 +389,33 @@ void Kalman::setMaxMinSensorValues(float min_, float max_)
 	Serial.print(F("centrifugal = ")); Serial.println(centrifugal, 6); */
 }
 
-void Kalman::setSinusoidBounds(float bound)
-{
+void Kalman::setSinusoidBounds(float bound) {
 	bounds = bound;
 	boundsSet = true;
 }
 
-void Kalman::setSensorReadings(float sensorReading_mpss)
-{
-	sensorValue = sensorReading_mpss;
+void Kalman::setSensorReadings(float sensorReading_mpss) {
+	float phi = (sensorReading_mpss - ampShift)/amplitude;
+	if(phi > 1) {
+		phi = 1;
+	} else if(phi < -1) {
+		phi = -1;
+	}
+	
+	float sensorAngle = asin(phi);
+	uint8_t quadrant = getNextQuadrant(sensorReading_mpss);
+	sensorAngle = getCalculatedAngle_rad(quadrant, sensorAngle);
+	
+	sensorModel[0] = sensorAngle;
+	sensorModel[1] = (sensorAngle - lastCalculatedAngle_rad)*(1/deltaT);
+	sensorModel[2] = sensorReading_mpss;
 }
 
-void Kalman::setSensorReadTimeDelta(float timeDelta_s)
-{
+void Kalman::setSensorReadTimeDelta(float timeDelta_s) {
 	deltaT = timeDelta_s;
 }
 
-bool Kalman::checkSetupComplete()
-{
+bool Kalman::checkSetupComplete() {
 	checkSetup = false;
 	if(kalmanIsInit	&& wheelPeriodSet && stdDevModelSet && stdDevSensorSet && boundsSet && wheelDirectionSet && wheelCircumferenceSet && maxMinSensorValuesSet)
 	{
@@ -450,8 +424,7 @@ bool Kalman::checkSetupComplete()
 	return checkSetup;
 }
 
-void Kalman::resetKalmanFilter()
-{
+void Kalman::resetKalmanFilter() {
 	checkSetup 						= false;		// Verify Set up was checked 
 	kalmanIsInit					= false;		// Checks model time is set
 	wheelPeriodSet				= false;
@@ -465,16 +438,12 @@ void Kalman::resetKalmanFilter()
 	// Will Keep bounds the same
 }
 
-void Kalman::determineDistanceTraveled()
-{
+void Kalman::getDistanceTraveled() {
 	float radToDistance_m = wheelCircumference_m/(2*PI);
 	float phi	= (X[2] + ampShift)/amplitude;
-	if(phi > 1)
-	{
+	if(phi > 1) {
 		phi = 1;
-	}
-	else if(phi < -1)
-	{
+	} else if(phi < -1) {
 		phi = -1;
 	}
 	
@@ -482,67 +451,84 @@ void Kalman::determineDistanceTraveled()
 	calculatedAngle_rad = asin(phi);
 	
 	// Determine what quadrant sinusoid is in
-	uint8_t lastQuadrant = quadrant;
-	if(quadrant == 1)
+	uint8_t lastQuadrant = currentQuadrant;
+	currentQuadrant = getNextQuadrant(X[2]);
+	calculatedAngle_rad = getCalculatedAngle_rad(currentQuadrant, calculatedAngle_rad);
+	
+	
+	if(lastQuadrant == 4 && currentQuadrant == 1) {
+		distanceTraveled_m += calculatedAngle_rad*radToDistance_m;
+	} else {
+		distanceTraveled_m += (calculatedAngle_rad - lastCalculatedAngle_rad)*radToDistance_m;
+	}
+	
+}
+
+uint8_t Kalman::getNextQuadrant(float currentAcceleration_mpss) {
+	uint8_t quadrant;
+	if(currentQuadrant == 1)
 	{
-		if(X[2] < lastPrediction)
+		if(currentAcceleration_mpss < lastPrediction)
 		{
 			quadrant = 2;
 		}
 	}
-	else if(quadrant == 2)
+	else if(currentQuadrant == 2)
 	{
-		if(X[2] < 0)
+		if(currentAcceleration_mpss < 0)
 		{
 			quadrant = 3;
 		}
 	}
-	else if(quadrant == 3)
+	else if(currentQuadrant == 3)
 	{
-		if(X[2] > lastPrediction)
+		if(currentAcceleration_mpss > lastPrediction)
 		{
 			quadrant = 4;
 		}
 	}
 	else
 	{
-		if(X[2] > 0)
+		if(currentAcceleration_mpss > 0)
 		{
 			quadrant = 1;
 		}
 	}
 	
+	return quadrant;
+}
+
+float Kalman::getCalculatedAngle_rad(uint8_t quadrant, float currentAngle_rad) {
 	// Determine calculated angle in radians
 	if(quadrant == 1)
 	{
-		calculatedAngle_rad = fabs(calculatedAngle_rad);
+		currentAngle_rad = fabs(currentAngle_rad);
 	}
 	else if(quadrant == 2)
 	{
-		calculatedAngle_rad = PI - calculatedAngle_rad;
+		currentAngle_rad = PI - currentAngle_rad;
 	}
 	else if(quadrant == 3)
 	{
-		calculatedAngle_rad = fabs(calculatedAngle_rad) + PI;
+		currentAngle_rad = fabs(currentAngle_rad) + PI;
 	}
 	else
 	{
-		calculatedAngle_rad += 2*PI;
+		currentAngle_rad += 2*PI;
 	}
 	
-	if(lastQuadrant == 4 && quadrant == 1)
-	{
-		distanceTraveled_m += calculatedAngle_rad*radToDistance_m;
-	}
-	else
-	{
-		distanceTraveled_m += (calculatedAngle_rad - lastCalculatedAngle_rad)*radToDistance_m;
-	}
-	
+	return currentAngle_rad;
 }
 
-void multiplyMatrixAxB(const uint8_t rows1, const uint8_t cols1, float size1, float matrix1[], const uint8_t rows2, const uint8_t cols2, float size2, float matrix2[])
-{
+
+
+
+
+//---------------------------------------------------------------------
+//---------Static Functions--------------------------------------------
+//---------------------------------------------------------------------
+
+void multiplyMatrixAxB(const uint8_t rows1, const uint8_t cols1, float size1, float matrix1[], const uint8_t rows2, const uint8_t cols2, float size2, float matrix2[]) {
   if(cols1 != rows2)
   {
     Serial.println(F("Multiplying Invalid Matrixes. Check ColsA and RowsB"));
@@ -629,8 +615,7 @@ void multiplyMatrixAxB(const uint8_t rows1, const uint8_t cols1, float size1, fl
   }
 }
 
-void addMatrixAnB(const uint8_t rows1, const uint8_t cols1, float size1, float matrix1[], const uint8_t rows2, const uint8_t cols2, float size2, float matrix2[])
-{
+void addMatrixAnB(const uint8_t rows1, const uint8_t cols1, float size1, float matrix1[], const uint8_t rows2, const uint8_t cols2, float size2, float matrix2[]) {
   if(rows1 != rows2 || cols1 != cols2)
   {
     Serial.println(F("Matrix Addition Failed: rows and columns sizes must match for each matrix"));
@@ -651,8 +636,28 @@ void addMatrixAnB(const uint8_t rows1, const uint8_t cols1, float size1, float m
   }
 }
 
-void multiplyMatrixByScalar(const uint8_t rows_, const uint8_t cols_, float size_, float matrix[], const float scalar)
-{
+void subMatrixAnB(const uint8_t rows1, const uint8_t cols1, float size1, float matrix1[], const uint8_t rows2, const uint8_t cols2, float size2, float matrix2[]) {
+	if(rows1 != rows2 || cols1 != cols2)
+  {
+    Serial.println(F("Matrix Subtraction Failed: rows and columns sizes must match for each matrix"));
+    while(1){}
+  }
+  
+  uint8_t i;
+  for(i = 0; i < size1; i++)
+  {
+		if(squared)
+		{
+			temp3x3[i] = matrix1[i] - matrix2[i];
+		}
+		else
+		{
+			temp3[i] = matrix1[i] - matrix2[i];
+		}
+  }
+}
+
+void multiplyMatrixByScalar(const uint8_t rows_, const uint8_t cols_, float size_, float matrix[], const float scalar) {
   if(size_ != rows_*cols_)
   {
     Serial.println(F("Scalar Multiply Failed: rows and columns don't match matrix size"));
@@ -673,8 +678,7 @@ void multiplyMatrixByScalar(const uint8_t rows_, const uint8_t cols_, float size
   }
 }
 
-void transposeMatrix(const uint8_t rows_, const uint8_t cols_, float size_, float matrix[])
-{
+void transposeMatrix(const uint8_t rows_, const uint8_t cols_, float size_, float matrix[]) {
   if(size_ != rows_*cols_)
   {
     Serial.println(F("Fail transpose because rows and columns do not match size of matrix"));
@@ -780,8 +784,7 @@ void transposeMatrix(const uint8_t rows_, const uint8_t cols_, float size_, floa
   }
 } */
 
-void debugPrompt()
-{
+void debugPrompt() {
 	Serial.println(F("\n press 'g' and enter to continue\n"));
 	char input;
 	bool stopped = true;
@@ -798,8 +801,7 @@ void debugPrompt()
 	}
 }
 
-void print3x1(float matrix[])
-{
+void print3x1(float matrix[]) {
 	uint8_t i = 0;
 	Serial.println();
 	for(i = 0; i < 3; i++)
@@ -810,8 +812,7 @@ void print3x1(float matrix[])
 	Serial.println();
 }
 
-void print3x3(float matrix[])
-{
+void print3x3(float matrix[]) {
 		uint8_t i = 0;
 		Serial.println();
 		for(i = 0; i < 9; i++)
@@ -829,8 +830,7 @@ void print3x3(float matrix[])
 		Serial.println();
 }
 
-bool checkNaN3x1(float matrix[])
-{
+bool checkNaN3x1(float matrix[]) {
 	uint8_t i = 0;
 	for(i = 0; i < 3; i++)
 	{
@@ -842,8 +842,7 @@ bool checkNaN3x1(float matrix[])
 	return false;
 }
 
-bool checkNaN3x3(float matrix[])
-{
+bool checkNaN3x3(float matrix[]) {
 	uint8_t i = 0;
 	for(i = 0; i < 9; i++)
 	{

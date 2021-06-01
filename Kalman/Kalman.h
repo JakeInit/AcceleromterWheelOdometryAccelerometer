@@ -48,7 +48,9 @@ public:
 	void	resetKalmanFilter();
 	
 private:
-	void	determineDistanceTraveled();
+	void	getDistanceTraveled();
+	uint8_t getNextQuadrant(float currentAcceleration_mpss);
+	float getCalculatedAngle_rad(uint8_t quadrant, float currentAngle_rad);
 	bool	checkSetupComplete();
 	
 	bool abort 									= false;
@@ -65,10 +67,9 @@ private:
 	
 	direction wheelDirection = CLOCKWISE;
 	
-	uint8_t quadrant	= 1;		// Quadrant of unit circle that the sinusoid is in
+	uint8_t currentQuadrant	= 1;		// Quadrant of unit circle that the sinusoid is in
 	
 	float modelTime_s = 0;
-	float sensorValue = 0;
 	float lastPrediction = 0;
 	float calculatedAngle_rad = 0;
 	float lastCalculatedAngle_rad = 0;
@@ -87,15 +88,15 @@ private:
 	
 	// Need initialized by user and will have initial value in Constructor
 	float Q[9];			// Covariance of the dynamic noises				is set in setStdDevModel
-	float R;				// Covariance of the measurement noises		is set in setStdDevSensor
+	float R[9];				// Covariance of the measurement noises		is set in setStdDevSensor
 	
 	// Needs initialized just in Constructor
 	float eye[9];		// 3x3 identity matrix
 	float dfda[9];	// Derivative of the state transition equations with respect to the dynamic noises
-	float dgdx[3];	// Derivative of the observation equations with respect to the state variables
+	// float dgdx[9];	// Derivative of the observation equations with respect to the state variables, will be identity
+	// float dgdn[9];	// Derivative of the observation equations with respect to the measurement noises, will be identity
 	
-	// initialized as constant
-	// const float dgdn = 1;	// Derivative of the observation equations with respect to the measurement noises
+	float sensorModel[3];	// observation model for sensor
 	
 	
 	float wheelPeriod_s		= 0;
