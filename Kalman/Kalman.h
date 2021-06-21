@@ -13,6 +13,7 @@
 #define _KALMAN_H_
 
 #include <stdint.h>
+#include <MatrixMath.h>
 
 #ifndef PI
 #define PI  3.1415926535897932384626433832795
@@ -81,22 +82,22 @@ private:
 	float sensorCenterOffset 	= 0;	// Sensor Offset from center of wheel
 	
 	// Caclculated Every Interval and will have initial values in Constructor
-	float X[3];			// State transition matrix
-	float S[9];			// Covariance Matrix
-	float dfdx[9];	// Derivative of the state transition equations with respect to the state variables
-									//		T (position 1) gets set in setSensorReadTimeDelta();
+	mtx_type X[3];				// State transition matrix
+	mtx_type S[3][3];			// Covariance Matrix
+	mtx_type dfdx[3][3];	// Derivative of the state transition equations with respect to the state variables
+												//		T (position 1) gets set in setSensorReadTimeDelta();
 	
 	// Need initialized by user and will have initial value in Constructor
-	float Q[9];			// Covariance of the dynamic noises				is set in setStdDevModel
-	float R[9];				// Covariance of the measurement noises		is set in setStdDevSensor
+	mtx_type Q[3][3];			// Covariance of the dynamic noises				is set in setStdDevModel
+	mtx_type R[3][3];			// Covariance of the measurement noises		is set in setStdDevSensor
 	
 	// Needs initialized just in Constructor
-	float eye[9];		// 3x3 identity matrix
-	float dfda[9];	// Derivative of the state transition equations with respect to the dynamic noises
+	mtx_type eye[3][3];		// 3x3 identity matrix
+	mtx_type dfda[3][3];	// Derivative of the state transition equations with respect to the dynamic noises
 	// float dgdx[9];	// Derivative of the observation equations with respect to the state variables, will be identity
 	// float dgdn[9];	// Derivative of the observation equations with respect to the measurement noises, will be identity
 	
-	float sensorModel[3];	// observation model for sensor
+	mtx_type sensorModel[3];	// observation model for sensor
 	
 	
 	float wheelPeriod_s		= 0;
