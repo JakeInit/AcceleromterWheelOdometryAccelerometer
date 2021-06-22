@@ -39,6 +39,7 @@
 #include <WString.h>
 
 #define constrain(amt,low,high) ((amt)<(low)?(low):((amt)>(high)?(high):(amt)))
+#define SQUARESIZE 3
 
 // Constructor
 Kalman::Kalman() {}
@@ -47,8 +48,8 @@ Kalman::~Kalman(){}
 
 void Kalman::initialize() {
 	uint8_t row, col;
-	for(row = 0; row < 2; row++) {
-		for(col = 0; col < 2; col++) {
+	for(row = 0; row < SQUARESIZE; row++) {
+		for(col = 0; col < SQUARESIZE; col++) {
 			if(row == 1 && col == 1) {								// Initialize derivative of the state transition equations and covariance of the measurement noises
 				dfda[row][col] = 1.0;
 				Q[row][col] = 1.0;
@@ -84,6 +85,8 @@ void Kalman::initialize() {
 	X[0] = 0.0;
 	X[1] = 0.0;
 	X[2] = 0.0;
+	
+	Matrix.Print((mtx_type*)eye, 3, 3, "I"); 
 }
 
 void Kalman::runFilter() {
@@ -113,6 +116,7 @@ void Kalman::runFilter() {
 		/* Serial.println(F("In First Iteration")); */
 		X[0] = fmod((2*PI*(1/wheelPeriod_s)*modelTime_s), 2*PI);
 		X[1] = 2*PI*(1/wheelPeriod_s);
+		Serial.print(F("Initial dx/dt = ")); Serial.println(X[1], 6);
 	}
 	
 	X[2] = amplitude*sin(X[0]) - ampShift;
@@ -148,8 +152,13 @@ void Kalman::runFilter() {
 	mtx_type SR[3][3];
 	Matrix.Add((mtx_type*) S, (mtx_type*) R, 3, 3, (mtx_type*) SR);	// S + R
 	
+	if(!Matrix.Invert((mtx_type*) SR, 3)) {		// (S + R)^-1
+		Serial.println(F("Failed to Invert Matrix. Skipping Update"));
+		return;
+	}
+	
 	mtx_type K[3][3];	// Kalman Gain
-	Matrix.Multiply((mtx_type*) S, (mtx_type*) SR, 3, 3, 3, (mtx_type*) K);	// S * (S + R)
+	Matrix.Multiply((mtx_type*) S, (mtx_type*) SR, 3, 3, 3, (mtx_type*) K);	// S * (S + R)^-1
 	
 	//------------------------------
 	// Determine updated X
@@ -159,14 +168,29 @@ void Kalman::runFilter() {
 	
 	mtx_type K_YmX[3];
 	Matrix.Multiply((mtx_type*) K, (mtx_type*) YmX, 3, 3, 1, (mtx_type*) K_YmX);					//     K *(Y - X)
-	Matrix.Add((mtx_type*) X, (mtx_type*) K_YmX, 3, 1, (mtx_type*) X);										// X + K *(Y - X), 3x1
+	
+	mtx_type newX[3];
+	Matrix.Add((mtx_type*) X, (mtx_type*) K_YmX, 3, 1, (mtx_type*) newX);									// X + K *(Y - X), 3x1
+	
+	X[0] = newX[0];
+	X[1] = newX[1];
+	X[2] = newX[2];
 	
 	//------------------------------
 	// Determine updated Covariance			// K*dgdx = K
-	//------------------------------
+	//------------------------------
 	mtx_type ImK_dgdx[3][3];
 	Matrix.Subtract((mtx_type*) eye, (mtx_type*) K, 3, 3, (mtx_type*) ImK_dgdx);			//  I - K*dgdx
-	Matrix.Multiply((mtx_type*) ImK_dgdx, (mtx_type*) S, 3, 3, 3, (mtx_type*) S);			// [I - K*dgdx]*S
+	
+	mtx_type newS[3][3];
+	Matrix.Multiply((mtx_type*) ImK_dgdx, (mtx_type*) S, 3, 3, 3, (mtx_type*) newS);			// [I - K*dgdx]*S
+	
+	uint8_t row, col;
+	for(row = 0; row < SQUARESIZE; row++) {
+		for(col = 0; col < SQUARESIZE; col++) {
+			S[row][col] = newS[row][col];
+		}
+	}
 	
 	//----------------------------------------------------------
 	//-----------Get Distance-----------------------------------
@@ -281,21 +305,46 @@ void Kalman::setSinusoidBounds(float bound) {
 	boundsSet = true;
 }
 
+#define AVERAGE 5
 void Kalman::setSensorReadings(float sensorReading_mpss) {
-	float phi = (sensorReading_mpss - ampShift)/amplitude;
-	if(phi > 1) {
-		phi = 1;
-	} else if(phi < -1) {
-		phi = -1;
+	static bool averageBufferFull = false;
+	static uint8_t index = 0;
+	static float averageBuffer[AVERAGE] = {0};
+	
+	averageBuffer[index] = sensorReading_mpss;
+	
+	if(!averageBufferFull && index == AVERAGE - 1) {
+		averageBufferFull = true;
 	}
 	
-	float sensorAngle = asin(phi);
-	uint8_t quadrant = getNextQuadrant(sensorReading_mpss);
-	sensorAngle = getCalculatedAngle_rad(quadrant, sensorAngle);
+	index++;
+	index %= AVERAGE;
 	
-	sensorModel[0] = sensorAngle;
-	sensorModel[1] = (sensorAngle - lastCalculatedAngle_rad)*(1/deltaT);
-	sensorModel[2] = sensorReading_mpss;
+	uint8_t i = 0;
+	float sum = 0;
+	for(i = 0; i < AVERAGE; i++) {
+		sum += averageBuffer[i];
+		//Serial.print(F("Index ")); Serial.print(i); Serial.print(F(" = ")); Serial.println(averageBuffer[i], 6);
+	}
+	
+	if(averageBufferFull) {
+		sum /= AVERAGE;
+	} else {
+		sum /= index;
+	}
+	//Serial.print(F("Sum = ")); Serial.println(sum, 6);
+	
+	if(firstRunDone) {
+		sensorModel[0] = fmod((sensorModel[0] + sensorModel[1]*deltaT), 2*PI);	// Keep between 0 and 2*PI
+	} else {
+		sensorModel[0] = fmod((2*PI*(1/wheelPeriod_s)*modelTime_s), 2*PI);
+	}
+	sensorModel[1] = 2 * PI * (1 / wheelPeriod_s);
+	sensorModel[2] = sum;
+	
+	/* Serial.print(F("Sensor Angle = ")); Serial.println(sensorModel[0], 6);
+	Serial.print(F("Sensor dx/dt = ")); Serial.println(sensorModel[1], 6);
+	Serial.print(F("Sensor accel = ")); Serial.println(sensorModel[2], 6); */
 }
 
 void Kalman::setSensorReadTimeDelta(float timeDelta_s) {
@@ -333,7 +382,6 @@ void Kalman::getDistanceTraveled() {
 		phi = -1;
 	}
 	
-	lastCalculatedAngle_rad = calculatedAngle_rad;
 	calculatedAngle_rad = asin(phi);
 	
 	// Determine what quadrant sinusoid is in
@@ -347,7 +395,7 @@ void Kalman::getDistanceTraveled() {
 	} else {
 		distanceTraveled_m += (calculatedAngle_rad - lastCalculatedAngle_rad)*radToDistance_m;
 	}
-	
+	lastCalculatedAngle_rad = calculatedAngle_rad;
 }
 
 uint8_t Kalman::getNextQuadrant(float currentAcceleration_mpss) {
