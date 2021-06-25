@@ -334,12 +334,24 @@ void Kalman::setSensorReadings(float sensorReading_mpss) {
 	}
 	//Serial.print(F("Sum = ")); Serial.println(sum, 6);
 	
+	float phi = (sum + ampShift)/amplitude;
+	if(phi > 1) {
+		phi = 1;
+	} else if(phi < -1) {
+		phi = -1;
+	}
+	float sensorAngle = asin(phi);
+	uint8_t quadrant = getNextQuadrant(sensorReading_mpss);
+	sensorAngle = getCalculatedAngle_rad(quadrant, sensorAngle);
+	
+	
 	if(firstRunDone) {
-		sensorModel[0] = fmod((sensorModel[0] + sensorModel[1]*deltaT), 2*PI);	// Keep between 0 and 2*PI
+		sensorModel[0] = sensorAngle;
+		sensorModel[1] = 2 * PI * (1 / wheelPeriod_s);
 	} else {
 		sensorModel[0] = fmod((2*PI*(1/wheelPeriod_s)*modelTime_s), 2*PI);
+		sensorModel[1] = (sensorAngle - lastCalculatedAngle_rad)*(1/deltaT);
 	}
-	sensorModel[1] = 2 * PI * (1 / wheelPeriod_s);
 	sensorModel[2] = sum;
 	
 	/* Serial.print(F("Sensor Angle = ")); Serial.println(sensorModel[0], 6);
